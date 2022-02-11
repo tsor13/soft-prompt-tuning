@@ -87,7 +87,14 @@ class SoftEmbedding(nn.Module):
         embedding = torch.cat([prepend_embedding, input_embedding], 1)
         attention_mask = torch.cat([torch.ones(input_embedding.size(0), self.prepend_tokens).long().to(device), attention_mask], 1)
         # get index of the last 1 in each row of attention_mask
-        last_one_index = torch.max(attention_mask, 1)[1]
+        # last_one_index = torch.max(attention_mask, 1)[1]
+        last_one_index = torch.zeros(attention_mask.size(0), dtype=torch.long).to(device)
+        # get all places where attention_mask is 1
+        inds = torch.nonzero(attention_mask)
+        for ind in range(attention_mask.size(0)):
+            # get highest value from inds
+            highest_ind = inds[inds[:,0] == ind][:,1].max()
+            last_one_index[ind] = highest_ind
         # first zero index is one more
         split = last_one_index + 1
         # if targets, insert at last_one_index + 1
