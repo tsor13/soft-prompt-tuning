@@ -4,8 +4,10 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from transformers import AdamW
 from datasets import load_dataset
+from pdb import set_trace as breakpoint
 
 device = 'cuda'
+# device = 'cpu'
 
 # load imdb
 dataset = load_dataset('imdb')
@@ -83,7 +85,7 @@ def collocator(batch):
 # train_dataset = dataset['train']
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collocator)
 # optimizer over s_wte
-optimizer = AdamW(s_wte.parameters(), lr=3e-4)
+optimizer = AdamW(s_wte.parameters(), lr=1e-3)
 for batch in train_dataloader:
     # get batch
     batch = {k: v.to(device) for k, v in batch.items()}
@@ -111,6 +113,7 @@ for batch in train_dataloader:
     print(loss)
     print(accuracy)
     print(tokenizer.decode(preds[labels_flat != -1]))
+    pass
 
 # inputs = tokenizer(['Luke, may the force be with', 'Are tacos food?', 'My least favorite food is'], return_tensors="pt", padding=True)
 # outputs = tokenizer(['you', 'yes', 'tuna'], return_tensors="pt", padding=True)

@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from pdb import set_trace as breakpoint
 
 class SoftEmbedding(nn.Module):
     def __init__(self, 
@@ -87,7 +88,7 @@ class SoftEmbedding(nn.Module):
         embedding = torch.cat([prepend_embedding, input_embedding], 1)
         attention_mask = torch.cat([torch.ones(input_embedding.size(0), self.prepend_tokens).long().to(device), attention_mask], 1)
         # get index of the last 1 in each row of attention_mask
-        last_one_index = torch.max(attention_mask, 1)[1]
+        last_one_index = torch.max(1-attention_mask, 1)[1]
         # first zero index is one more
         split = last_one_index + 1
         # if targets, insert at last_one_index + 1
@@ -116,7 +117,7 @@ class SoftEmbedding(nn.Module):
         labels = torch.ones(attention_mask.size(0), attention_mask.size(1)).long().to(device) * -1
         for index, split_ind in enumerate(split):
             target_len = target_attention_mask.size(1)
-            inds = torch.where(target_mask[index] == 1)[0]
+            inds = torch.where(target_mask[index] == 1)[0].to(device)
             target_inds = inds - split_ind
             # and set
             labels[index, inds] = target_tokens[index, target_inds]
