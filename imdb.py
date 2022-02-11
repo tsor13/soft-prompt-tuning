@@ -6,6 +6,8 @@ from transformers import AdamW
 from datasets import load_dataset
 from pdb import set_trace as breakpoint
 
+model_name = 'gpt2-medium'
+
 device = 'cuda'
 # device = 'cpu'
 
@@ -13,7 +15,7 @@ device = 'cuda'
 dataset = load_dataset('imdb')
 
 # tokenizer
-tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+tokenizer = GPT2Tokenizer.from_pretrained(model_name)
 tokenizer.pad_token = tokenizer.eos_token
 
 
@@ -38,7 +40,7 @@ from soft_embedding import SoftEmbedding
 n_tokens = 10
 initialize_from_vocab = True
 
-model = GPT2LMHeadModel.from_pretrained('gpt2').to(device)
+model = GPT2LMHeadModel.from_pretrained(model_name).to(device)
 
 s_wte = SoftEmbedding(model.get_input_embeddings(), 
                       # n_tokens=n_tokens, 
