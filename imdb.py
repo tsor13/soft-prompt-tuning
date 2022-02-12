@@ -1,12 +1,16 @@
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
+# from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from transformers import AdamW
 from datasets import load_dataset
+from lm_utils import get_device_map
 from pdb import set_trace as breakpoint
 
-model_name = 'gpt2-medium'
+model_name = 'gpt2-xl'
+# model_name = 'EleutherAI/gpt-j-6B'
 
 device = 'cuda'
 # device = 'cpu'
@@ -15,7 +19,7 @@ device = 'cuda'
 dataset = load_dataset('imdb')
 
 # tokenizer
-tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+tokenizer = AutoTokenizer.from_pretrained(model_name)
 tokenizer.pad_token = tokenizer.eos_token
 
 
@@ -30,17 +34,34 @@ def label_function(examples):
     output = tokenizer(target, return_tensors='pt')
     return {'target': target, 'target_input_ids': output['input_ids'], 'target_attention_mask': output['attention_mask']}
 
-train_dataset = dataset['test'].map(preprocess_function, batched=False)
+train_dataset = dataset['train'].map(preprocess_function, batched=False)
 train_dataset = train_dataset.map(label_function, batched=False)
 
 
 from soft_embedding import SoftEmbedding
 
 # model
-n_tokens = 10
+n_tokens = 100
 initialize_from_vocab = True
 
-model = GPT2LMHeadModel.from_pretrained(model_name).to(device)
+model = AutoModelForCausalLM.from_pretrained(model_name)
+print(model_name)
+
+# get the number of attention layers
+n_blocks = model.config.n_layer
+if torch.cuda.is_available():
+    # get all available GPUs
+    gpus = np.arange(torch.cuda.device_count())
+    device = 'cuda:0'
+    if len(gpus) > 1:
+        device_map = get_device_map(gpus, n_blocks)
+        model.parallelize(device_map)
+    else:
+        model = model.to(device)
+    print(f'Loaded model on {len(gpus)} GPUs.')
+else:
+    device = 'cpu'
+    print('Loaded model on cpu.')
 
 s_wte = SoftEmbedding(model.get_input_embeddings(), 
                       # n_tokens=n_tokens, 
@@ -52,7 +73,7 @@ s_wte = SoftEmbedding(model.get_input_embeddings(),
 loss_function = torch.nn.CrossEntropyLoss(ignore_index=-1)
 
 # data loader
-batch_size = 4
+batch_size = 16
 # make collocator function that fills in the correct padding
 def collocator(batch):
     # for input_ids, pad with tokenizer.pad_token
@@ -87,6 +108,7 @@ def collocator(batch):
 # train_dataset = dataset['train']
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collocator)
 # optimizer over s_wte
+# optimizer = AdamW(s_wte.parameters(), lr=1e-4)
 optimizer = AdamW(s_wte.parameters(), lr=1e-3)
 for batch in train_dataloader:
     # get batch
@@ -114,29 +136,5 @@ for batch in train_dataloader:
     accuracy = match.mean()
     print(loss)
     print(accuracy)
-    print(tokenizer.decode(preds[labels_flat != -1]))
+    # print(tokenizer.decode(preds[labels_flat != -1]))
     pass
-
-# inputs = tokenizer(['Luke, may the force be with', 'Are tacos food?', 'My least favorite food is'], return_tensors="pt", padding=True)
-# outputs = tokenizer(['you', 'yes', 'tuna'], return_tensors="pt", padding=True)
-# inputs['target_input_ids'] = outputs['input_ids']
-# inputs['target_attention_mask'] = outputs['attention_mask']
-# inputs['target_present'] = True
-# test = s_wte(inputs)
-# breakpoint()
-# output = model(inputs_embeds=test['inputs_embeds'], attention_mask=test['attention_mask'])
-# logits = output['logits']
-# # do cross entropy loss
-# logit_flat = logits.view(-1, logits.size(-1))
-# labels_flat = test['labels'].view(-1)
-# loss = loss_function(logit_flat, labels_flat)
-# 
-# 
-# # apply softmax to logits
-# logprobs = torch.nn.functional.log_softmax(logits, dim=-1)
-# 
-# batch_size = logprobs.size(0)
-# # do cross entropy loss where target_mask
-# loss = loss_function(logprobs, outputs['labels'])
-# 
-# pass
