@@ -11,6 +11,7 @@ from lm_utils import get_device_map
 from pdb import set_trace as breakpoint
 from tqdm import tqdm
 from SoftPromptModel import SoftPromptModel
+import pandas as pd
 
 model_name = 'gpt2'
 # model_name = 'gpt2-xl'
@@ -78,7 +79,7 @@ soft_prompt_model = SoftPromptModel(
 loss_function = torch.nn.CrossEntropyLoss(ignore_index=-100)
 
 # data loader
-batch_size = 4
+batch_size = 16
 # make collocator function that fills in the correct padding
 def collocator(batch):
     # for input_ids, pad with tokenizer.pad_token
@@ -202,6 +203,7 @@ def accuracy_function(logits, labels):
     accuracy = match.mean().item()
     return accuracy
 
+train_stats = []
 # train
 for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
     # get batch
@@ -214,9 +216,6 @@ for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
         target_mask=batch['target_attention_mask'],
     )
     loss = output[0]
-    # optimizer.zero_grad()
-    # loss.backward()
-    # optimizer.step()
     print(f'Loss: {loss.item()}')
 
     if i >= max_batches:
@@ -259,6 +258,82 @@ for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
+
+    # save train stats
+    train_stats.append({
+        'loss': loss.item(),
+        'any_ce_loss': any_ce_loss.item(),
+        'mi_loss': mi_loss.item(),
+        'ce_loss': ce_loss.item(),
+        'accuracy': accuracy,
+    })
+
+# now test
+test_stats = []
+with torch.no_grad():
+    for i, batch in tqdm(enumerate(test_dataloader), total=len(test_dataloader)):
+        # get batch
+        batch = {k: v.to(device) for k, v in batch.items()}
+        # send through soft prompt model
+        output = soft_prompt_model(
+            input_ids=batch['input_ids'],
+            attention_mask=batch['attention_mask'],
+            target_ids=batch['target_input_ids'],
+            target_mask=batch['target_attention_mask'],
+        )
+        loss = output[0]
+        print(f'Loss: {loss.item()}')
+
+        if i >= max_batches:
+            break
+        # get logits
+        logits = output['logits'].to(device)
+        labels = output['labels'].to(device)
+        target_index = output['target_index'].to(device)
+
+        any_ce_loss = any_ce_function(logits, indices_of_interest, target_index)
+        print(f'Any CE loss: {any_ce_loss.item()}')
+        
+        mi_loss = mutual_information_function(logits, indices_of_interest, target_index)
+        print(f'Mutual info loss: {mi_loss.item()}')
+        
+        ce_loss = cross_entropy_function(logits, labels)
+        print(f'Cross entropy loss: {ce_loss.item()}')
+
+        # check if ce_loss is equal to outputs[0]
+        if ce_loss != loss:
+            print('ERROR - CE LOSS DOES NOT MATCH')
+
+        accuracy = accuracy_function(logits, labels)
+        # sanity check
+        print(f'Accuracy: {accuracy}')
+
+        # shift
+        shift_logits = logits[..., :-1, :].contiguous()
+        shift_labels = labels[..., 1:].contiguous()
+        # get prediction and print
+        preds = torch.argmax(shift_logits, dim=-1)
+
+        print(tokenizer.decode(preds[shift_labels != -100]))
+
+        test_stats.append({
+            'loss': loss.item(),
+            'any_ce_loss': any_ce_loss.item(),
+            'mi_loss': mi_loss.item(),
+            'ce_loss': ce_loss.item(),
+            'accuracy': accuracy,
+        })
+
+# to pandas
+train_stats = pd.DataFrame(train_stats)
+test_stats = pd.DataFrame(test_stats)
+# save stats
+train_stats.to_csv('train_stats.csv')
+test_stats.to_csv('test_stats.csv')
+
+
+
+
 
 breakpoint()
 test = 'This was the worst movie I\'ve ever seen. Leonardo Dicaprio, more like Leonardo DeCRAPio. The writing was okay, but the acting was terrible. I am never going to see a movie like this again.'
