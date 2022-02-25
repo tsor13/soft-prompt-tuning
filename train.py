@@ -120,28 +120,38 @@ indices_of_interest = [tokenizer.encode(label)[0] for label in ['positive', 'neg
 
 max_batches = 300
 
-# train
-for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
-    # get batch
-    batch = {k: v.to(device) for k, v in batch.items()}
-    # send through soft prompt model
-    output = soft_prompt_model(
-        input_ids=batch['input_ids'],
-        attention_mask=batch['attention_mask'],
-        target_ids=batch['target_input_ids'],
-        target_mask=batch['target_attention_mask'],
-    )
-    loss = output[0]
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
-    print(f'Loss: {loss.item()}')
+def cross_entropy_function(logits, labels):
+    # shift so they line up
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+    ce_loss = loss_function(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+    return ce_loss
 
-    if i >= max_batches:
-        break
-    # get logits
-    logits = output['logits'].to(device)
-    labels = output['labels'].to(device)
+def any_ce_function(logits, indices_of_interest, target_index):
+    # shift so they line up
+    shift_logits = logits[..., :-1, :].contiguous()
+
+    # CROSS ENTROPY OF ANY LABEL
+    # get logprobs
+    logprobs = F.log_softmax(shift_logits, dim=-1)
+    label_logprobs = logprobs[:, :, indices_of_interest]
+    # do softmax
+    # subtract to match with shifted?
+    split_locations = target_index - 1
+    # only keep logits at [0, split_locations[0]], ..., [n, split_locations[n]]
+    inds1 = np.arange(0, split_locations.shape[0])
+    inds2 = split_locations.flatten()
+    # NEED TO SUBTRACT ONE TO FIX OFF BY ONE ERROR
+    label_logprobs = label_logprobs[inds1, inds2]
+    # maximize weight on any of the labels
+    # get probs and calculate cross entropy
+    probs = torch.exp(label_logprobs)
+    all_probs = torch.sum(probs, dim=1)
+    # get loss
+    any_ce_loss = -(torch.log(all_probs)).mean()
+    return any_ce_loss
+
+def mutual_information_function(logits, indices_of_interest, target_index):
     # shift so they line up
     shift_logits = logits[..., :-1, :].contiguous()
     shift_labels = labels[..., 1:].contiguous()
@@ -161,10 +171,6 @@ for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
     # maximize weight on any of the labels
     # get probs and calculate cross entropy
     probs = torch.exp(label_logprobs)
-    all_probs = torch.sum(probs, dim=1)
-    # get loss
-    any_ce_loss = -(torch.log(all_probs)).mean()
-    print(f'Any CE loss: {any_ce_loss.item()}')
 
     # make sure that shift_labels[inds1,inds2] are not -100
     if torch.sum(shift_labels[inds1, inds2] == -100).item() > 0:
@@ -179,26 +185,13 @@ for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
     marginal_entropy = -(overall_dist * torch.log(overall_dist)).sum()
     mutual_info = marginal_entropy - cond_entropy.mean()
     mi_loss = -mutual_info
-    print(f'Mutual info loss: {mi_loss.item()}')
-    
-    # CROSS ENTROPY
-    # do cross entropy loss
-    # logit_flat = logits.view(-1, logits.size(-1))
-    # # labels_flat = batch['labels'].view(-1).to(device)
-    # labels_flat = output['labels'].view(-1).to(device)
-    # ce_loss = loss_function(logit_flat, labels_flat)
+    return mi_loss
 
-    ce_loss = loss_function(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
-    print(f'Cross entropy loss: {ce_loss.item()}')
-    # check if ce_loss is equal to outputs[0]
-    if ce_loss != loss:
-        print('ERROR - CE LOSS DOES NOT MATCH')
-    # backprop
-    # optimizer.zero_grad()
-    # loss.backward()
-    # optimizer.step()
-    # get accuracy
-    # _, preds = torch.max(logit_flat, 1)
+def accuracy_function(logits, labels):
+    # shift so they line up
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+
     preds = torch.argmax(shift_logits, dim=-1)
     # see if matches
     # match = (preds == labels_flat).float()
@@ -206,11 +199,56 @@ for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
     # only keep where labels_flat != -100
     # match = match[labels_flat != -100]
     match = match[shift_labels != -100]
-    accuracy = match.mean()
+    accuracy = match.mean().item()
+    return accuracy
+
+# train
+for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
+    # get batch
+    batch = {k: v.to(device) for k, v in batch.items()}
+    # send through soft prompt model
+    output = soft_prompt_model(
+        input_ids=batch['input_ids'],
+        attention_mask=batch['attention_mask'],
+        target_ids=batch['target_input_ids'],
+        target_mask=batch['target_attention_mask'],
+    )
+    loss = output[0]
+    # optimizer.zero_grad()
+    # loss.backward()
+    # optimizer.step()
+    print(f'Loss: {loss.item()}')
+
+    if i >= max_batches:
+        break
+    # get logits
+    logits = output['logits'].to(device)
+    labels = output['labels'].to(device)
+    target_index = output['target_index'].to(device)
+
+    any_ce_loss = any_ce_function(logits, indices_of_interest, target_index)
+    print(f'Any CE loss: {any_ce_loss.item()}')
+    
+    mi_loss = mutual_information_function(logits, indices_of_interest, target_index)
+    print(f'Mutual info loss: {mi_loss.item()}')
+    
+    ce_loss = cross_entropy_function(logits, labels)
+    print(f'Cross entropy loss: {ce_loss.item()}')
+
+    # check if ce_loss is equal to outputs[0]
+    if ce_loss != loss:
+        print('ERROR - CE LOSS DOES NOT MATCH')
+
+    accuracy = accuracy_function(logits, labels)
     # sanity check
-    # print(torch.argmax(logits[inds1, inds2-1], 1) == preds[labels_flat != -1])
-    print(f'Accuracy: {accuracy.item()}')
-    # print(tokenizer.decode(preds[labels_flat != -100]))
+    print(f'Accuracy: {accuracy}')
+
+    # shift
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
+    # get prediction and print
+    preds = torch.argmax(shift_logits, dim=-1)
+
     print(tokenizer.decode(preds[shift_labels != -100]))
 
 
@@ -218,9 +256,9 @@ for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
     # loss = mi_loss + any_ce_loss
     # loss = mi_loss + ce_loss
     # print(f'Total loss: {loss.item()}')
-    # optimizer.zero_grad()
-    # loss.backward()
-    # optimizer.step()
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
 
 breakpoint()
 test = 'This was the worst movie I\'ve ever seen. Leonardo Dicaprio, more like Leonardo DeCRAPio. The writing was okay, but the acting was terrible. I am never going to see a movie like this again.'
