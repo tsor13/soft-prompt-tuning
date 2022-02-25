@@ -140,8 +140,8 @@ for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
     if i >= max_batches:
         break
     # get logits
-    logits = output['logits']
-    labels = output['labels']
+    logits = output['logits'].to(device)
+    labels = output['labels'].to(device)
     # shift so they line up
     shift_logits = logits[..., :-1, :].contiguous()
     shift_labels = labels[..., 1:].contiguous()
