@@ -176,11 +176,11 @@ class SoftPromptModel(PreTrainedModel):
         )
 
         # set target index
-        output['target_index'] = target_start_index + 1
-        # shift labels over 1 to offset off by one error
-        new_labels = torch.full_like(labels, -100).to(device).long()
-        new_labels[:, 1:] = labels[:, :-1]
-        labels = new_labels
+        output['target_index'] = target_start_index
+        # # shift labels over 1 to offset off by one error
+        # new_labels = torch.full_like(labels, -100).to(device).long()
+        # new_labels[:, 1:] = labels[:, :-1]
+        # labels = new_labels
         output['labels'] = labels
 
         return output

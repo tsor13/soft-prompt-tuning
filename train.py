@@ -10,13 +10,13 @@ from datasets import load_dataset
 from lm_utils import get_device_map
 from pdb import set_trace as breakpoint
 from tqdm import tqdm
+from SoftPromptModel import SoftPromptModel
 
 model_name = 'gpt2'
 # model_name = 'gpt2-xl'
 # model_name = 'EleutherAI/gpt-j-6B'
 
-device = 'cuda'
-# device = 'cpu'
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # load imdb
 dataset = load_dataset('imdb')
@@ -40,8 +40,9 @@ def label_function(examples):
 train_dataset = dataset['train'].map(preprocess_function, batched=False)
 train_dataset = train_dataset.map(label_function, batched=False)
 
-
-from SoftPromptModel import SoftPromptModel
+# make test dataset
+test_dataset = dataset['test'].map(preprocess_function, batched=False)
+test_dataset = test_dataset.map(label_function, batched=False)
 
 # model
 n_tokens = 10
@@ -111,15 +112,15 @@ def collocator(batch):
 
 # train_dataset = dataset['train']
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collocator)
-# optimizer over s_wte
-# optimizer = AdamW(s_wte.parameters(), lr=1e-4)
-# optimizer = AdamW(s_wte.parameters(), lr=1e-3)
+test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, collate_fn=collocator)
+
 optimizer = AdamW(soft_prompt_model.parameters(), lr=1e-3)
 
 indices_of_interest = [tokenizer.encode(label)[0] for label in ['positive', 'negative']]
 
 max_batches = 300
 
+# train
 for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
     # get batch
     batch = {k: v.to(device) for k, v in batch.items()}
@@ -138,69 +139,88 @@ for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
 
     if i >= max_batches:
         break
-    # # get logits
-    # logits = output['logits']
+    # get logits
+    logits = output['logits']
+    labels = output['labels']
+    # shift so they line up
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = labels[..., 1:].contiguous()
 
-    # # CROSS ENTROPY OF ANY LABEL
-    # # get logprobs
-    # logprobs = F.log_softmax(logits, dim=-1)
-    # label_logprobs = logprobs[:, :, indices_of_interest]
-    # # do softmax
-    # split_locations = output['target_index']
-    # # only keep logits at [0, split_locations[0]], ..., [n, split_locations[n]]
-    # inds1 = np.arange(0, split_locations.shape[0])
-    # inds2 = split_locations.flatten()
-    # # NEED TO SUBTRACT ONE TO FIX OFF BY ONE ERROR
-    # label_logprobs = label_logprobs[inds1, inds2-1]
-    # # maximize weight on any of the labels
-    # # get probs and calculate cross entropy
-    # probs = torch.exp(label_logprobs)
-    # all_probs = torch.sum(probs, dim=1)
-    # # get loss
-    # any_ce_loss = -(torch.log(all_probs)).mean()
-    # print(f'Any CE loss: {any_ce_loss.item()}')
+    # CROSS ENTROPY OF ANY LABEL
+    # get logprobs
+    logprobs = F.log_softmax(shift_logits, dim=-1)
+    label_logprobs = logprobs[:, :, indices_of_interest]
+    # do softmax
+    # subtract to match with shifted?
+    split_locations = output['target_index'] - 1
+    # only keep logits at [0, split_locations[0]], ..., [n, split_locations[n]]
+    inds1 = np.arange(0, split_locations.shape[0])
+    inds2 = split_locations.flatten()
+    # NEED TO SUBTRACT ONE TO FIX OFF BY ONE ERROR
+    label_logprobs = label_logprobs[inds1, inds2]
+    # maximize weight on any of the labels
+    # get probs and calculate cross entropy
+    probs = torch.exp(label_logprobs)
+    all_probs = torch.sum(probs, dim=1)
+    # get loss
+    any_ce_loss = -(torch.log(all_probs)).mean()
+    print(f'Any CE loss: {any_ce_loss.item()}')
 
-    # # MUTUAL INFORMATION BETWEEN LABELS
-    # # normalize probs so that they sum to 1
-    # probs = probs / torch.sum(probs, dim=1).unsqueeze(1)
-    # # TODO - make more numerically stable??
-    # cond_entropy = -(probs * torch.log(probs)).sum(dim=1)
-    # overall_dist = torch.mean(probs, dim=0)
-    # marginal_entropy = -(overall_dist * torch.log(overall_dist)).sum()
-    # mutual_info = marginal_entropy - cond_entropy.mean()
-    # mi_loss = -mutual_info
-    # print(f'Mutual info loss: {mi_loss.item()}')
+    # make sure that shift_labels[inds1,inds2] are not -100
+    if torch.sum(shift_labels[inds1, inds2] == -100).item() > 0:
+        print('WARNING: -100 in shift_labels')
+
+    # MUTUAL INFORMATION BETWEEN LABELS
+    # normalize probs so that they sum to 1
+    probs = probs / torch.sum(probs, dim=1).unsqueeze(1)
+    # TODO - make more numerically stable?? Can't use label_logprobs because it's not normalized as of now
+    cond_entropy = -(probs * torch.log(probs)).sum(dim=1)
+    overall_dist = torch.mean(probs, dim=0)
+    marginal_entropy = -(overall_dist * torch.log(overall_dist)).sum()
+    mutual_info = marginal_entropy - cond_entropy.mean()
+    mi_loss = -mutual_info
+    print(f'Mutual info loss: {mi_loss.item()}')
     
-    # # CROSS ENTROPY
-    # # do cross entropy loss
+    # CROSS ENTROPY
+    # do cross entropy loss
     # logit_flat = logits.view(-1, logits.size(-1))
     # # labels_flat = batch['labels'].view(-1).to(device)
     # labels_flat = output['labels'].view(-1).to(device)
     # ce_loss = loss_function(logit_flat, labels_flat)
-    # print(f'Cross entropy loss: {ce_loss.item()}')
-    # # backprop
-    # # optimizer.zero_grad()
-    # # loss.backward()
-    # # optimizer.step()
-    # # get accuracy
-    # _, preds = torch.max(logit_flat, 1)
-    # # see if matches
-    # match = (preds == labels_flat).float()
-    # # only keep where labels_flat != -100
-    # match = match[labels_flat != -100]
-    # accuracy = match.mean()
-    # # sanity check
-    # # print(torch.argmax(logits[inds1, inds2-1], 1) == preds[labels_flat != -1])
-    # print(f'Accuracy: {accuracy.item()}')
-    # print(tokenizer.decode(preds[labels_flat != -100]))
 
-    # # loss = any_ce_loss + mi_loss + ce_loss
-    # # loss = mi_loss + any_ce_loss
-    # # loss = mi_loss + ce_loss
-    # # print(f'Total loss: {loss.item()}')
-    # # optimizer.zero_grad()
-    # # loss.backward()
-    # # optimizer.step()
+    ce_loss = loss_function(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+    print(f'Cross entropy loss: {ce_loss.item()}')
+    # check if ce_loss is equal to outputs[0]
+    if ce_loss != loss:
+        print('ERROR - CE LOSS DOES NOT MATCH')
+    # backprop
+    # optimizer.zero_grad()
+    # loss.backward()
+    # optimizer.step()
+    # get accuracy
+    # _, preds = torch.max(logit_flat, 1)
+    preds = torch.argmax(shift_logits, dim=-1)
+    # see if matches
+    # match = (preds == labels_flat).float()
+    match = (preds == shift_labels).float()
+    # only keep where labels_flat != -100
+    # match = match[labels_flat != -100]
+    match = match[shift_labels != -100]
+    accuracy = match.mean()
+    # sanity check
+    # print(torch.argmax(logits[inds1, inds2-1], 1) == preds[labels_flat != -1])
+    print(f'Accuracy: {accuracy.item()}')
+    # print(tokenizer.decode(preds[labels_flat != -100]))
+    print(tokenizer.decode(preds[shift_labels != -100]))
+
+
+    # loss = any_ce_loss + mi_loss + ce_loss
+    # loss = mi_loss + any_ce_loss
+    # loss = mi_loss + ce_loss
+    # print(f'Total loss: {loss.item()}')
+    # optimizer.zero_grad()
+    # loss.backward()
+    # optimizer.step()
 
 breakpoint()
 test = 'This was the worst movie I\'ve ever seen. Leonardo Dicaprio, more like Leonardo DeCRAPio. The writing was okay, but the acting was terrible. I am never going to see a movie like this again.'
