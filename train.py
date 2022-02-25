@@ -12,6 +12,9 @@ from pdb import set_trace as breakpoint
 from tqdm import tqdm
 from SoftPromptModel import SoftPromptModel
 import pandas as pd
+import wandb
+
+wandb.init(project="causal-lm-soft-prompt", entity='tsor1313')
 
 model_name = 'gpt2'
 # model_name = 'gpt2-xl'
@@ -115,7 +118,18 @@ def collocator(batch):
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collocator)
 test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, collate_fn=collocator)
 
-optimizer = AdamW(soft_prompt_model.parameters(), lr=1e-3)
+learning_rate = 1e-3
+optimizer = AdamW(soft_prompt_model.parameters(), lr=learning_rate)
+
+# log into wandb
+wandb.config = {
+    'learning_rate': learning_rate,
+    'n_tokens': n_tokens,
+    'n_blocks': n_blocks,
+    'model_name': model_name,
+    'batch_size': batch_size,
+    'n_epochs': 10,
+}
 
 indices_of_interest = [tokenizer.encode(label)[0] for label in ['positive', 'negative']]
 
@@ -267,6 +281,14 @@ for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
         'ce_loss': ce_loss.item(),
         'accuracy': accuracy,
     })
+    # now log into wandb
+    wandb.log({
+        'loss': loss.item(),
+        'any_ce_loss': any_ce_loss.item(),
+        'mi_loss': mi_loss.item(),
+        'ce_loss': ce_loss.item(),
+        'accuracy': accuracy,
+    })
 
 # now test
 test_stats = []
@@ -330,6 +352,9 @@ test_stats = pd.DataFrame(test_stats)
 # save stats
 train_stats.to_csv('train_stats.csv')
 test_stats.to_csv('test_stats.csv')
+# get average statistics for test and log into wandb
+avg_test_stats = test_stats.mean()
+wandb.log(avg_test_stats)
 
 
 
