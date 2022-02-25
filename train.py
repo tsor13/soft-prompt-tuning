@@ -365,6 +365,8 @@ train_stats.to_csv('train_stats.csv')
 test_stats.to_csv('test_stats.csv')
 # get average statistics for test and log into wandb
 avg_test_stats = test_stats.mean()
+# convert to dictionary
+avg_test_stats = avg_test_stats.to_dict()
 wandb.log(avg_test_stats)
 
 
