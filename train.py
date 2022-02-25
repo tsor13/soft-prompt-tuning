@@ -121,6 +121,9 @@ test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, 
 learning_rate = 1e-3
 optimizer = AdamW(soft_prompt_model.parameters(), lr=learning_rate)
 
+# loss is either cross entropy, mi_loss + any_ce_loss, or mi_loss
+loss_type = 'mi_loss + any_ce_loss'
+
 # log into wandb
 wandb.config = {
     'learning_rate': learning_rate,
@@ -129,6 +132,7 @@ wandb.config = {
     'model_name': model_name,
     'batch_size': batch_size,
     'n_epochs': 10,
+    'loss_type': loss_type,
 }
 
 indices_of_interest = [tokenizer.encode(label)[0] for label in ['positive', 'negative']]
@@ -269,6 +273,13 @@ for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
     # loss = mi_loss + any_ce_loss
     # loss = mi_loss + ce_loss
     # print(f'Total loss: {loss.item()}')
+    if loss_type == 'mi_loss + any_ce_loss':
+        loss = mi_loss + any_ce_loss
+    elif loss_type == 'mi':
+        loss = mi_loss
+    elif loss_type == 'ce':
+        loss = ce_loss
+
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
