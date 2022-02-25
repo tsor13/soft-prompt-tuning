@@ -16,8 +16,8 @@ import wandb
 
 wandb.init(project="causal-lm-soft-prompt", entity='tsor1313')
 
-model_name = 'gpt2'
-# model_name = 'gpt2-xl'
+# model_name = 'gpt2'
+model_name = 'gpt2-xl'
 # model_name = 'EleutherAI/gpt-j-6B'
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -82,7 +82,7 @@ soft_prompt_model = SoftPromptModel(
 loss_function = torch.nn.CrossEntropyLoss(ignore_index=-100)
 
 # data loader
-batch_size = 16
+batch_size = 8
 # make collocator function that fills in the correct padding
 def collocator(batch):
     # for input_ids, pad with tokenizer.pad_token
@@ -257,12 +257,12 @@ for i, batch in tqdm(enumerate(train_dataloader), total=max_batches):
     print(f'Accuracy: {accuracy}')
 
     # shift
-    shift_logits = logits[..., :-1, :].contiguous()
-    shift_labels = labels[..., 1:].contiguous()
-    # get prediction and print
-    preds = torch.argmax(shift_logits, dim=-1)
+    # shift_logits = logits[..., :-1, :].contiguous()
+    # shift_labels = labels[..., 1:].contiguous()
+    # # get prediction and print
+    # preds = torch.argmax(shift_logits, dim=-1)
 
-    print(tokenizer.decode(preds[shift_labels != -100]))
+    # print(tokenizer.decode(preds[shift_labels != -100]))
 
 
     # loss = any_ce_loss + mi_loss + ce_loss
